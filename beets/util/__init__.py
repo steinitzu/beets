@@ -636,6 +636,7 @@ class FixedDict(dict):
     def __init__(self, keys=(), values=None, extendable=False):
         self.extendable = extendable
         values = values or {}
+        self.dirty = {}
         super(FixedDict, self).__init__(values)
         seti = super(FixedDict, self).__setitem__
         for key in keys:
@@ -648,7 +649,7 @@ class FixedDict(dict):
         for key in self.iterkeys():
             self.dirty[key] = False
 
-    def is_dirty(self, key):
+    def is_dirty(self, key=None):
         """Checks if given `key` is dirty and returns bool respectively.
         When no key is provided, True is returned if any key is dirty.
         """
@@ -657,7 +658,7 @@ class FixedDict(dict):
         return key in self.dirty and self.dirty[key]
 
     def __setitem__(self, key, value):
-        if key not in self and not self.canaddkeys:
+        if key not in self and not self.extendable:
             raise KeyError('{} is not a valid key.'.format(key))
         elif key in self and self[key] == value:
             return

@@ -967,6 +967,121 @@ class MtimeTest(unittest.TestCase):
         self.i.read()
         self.assertGreaterEqual(self.i.mtime, self._mtime())
 
+class FlexibleAttributesTest(unittest.TestCase):
+    def setUp(self):
+        self.lib = beets.library.Library(':memory:')
+        self.i = item() 
+        self.i2 = item()
+        self.a = self.lib.add_album([self.i, self.i2])
+        self.a2 = self.lib.add_album([self.i, self.i2])
+        self.a3 = self.lib.add_album([self.i, self.i2])
+        self.i.flexattrs.add_namespace('foo')
+        self.i2.flexattrs.add_namespace('foo')
+        self.a.flexattrs.add_namespace('foo')
+        self.a2.flexattrs.add_namespace('foo')
+        self.a3.flexattrs.add_namespace('foo')
+
+
+    def test_set_flexattr_item(self):
+        setattr(self.i, 'foo-bar', 'baz')
+        assert(getattr(self.i, 'foo-bar') == 'baz')
+
+    def test_set_flexattr_album(self):
+        setattr(self.a, 'foo-bar', 'baz')
+        assert(getattr(self.a, 'foo-bar') == 'baz')
+
+    def test_store_fetch_flexattrs_item(self):
+        """Store flexattr in the database and fetch them again."""
+        setattr(self.i, 'foo-bar', 'baz')
+        self.lib.store(self.i)
+        i = self.lib.get_item(self.i.id)
+        assert(getattr(i, 'foo-bar') == 'baz')
+
+    def test_store_fetch_flexattrs_album(self):
+        setattr(self.a, 'foo-bar', 'baz')
+        a = self.lib.get_album(self.a.id)
+        assert(getattr(a, 'foo-bar') == 'baz')
+
+    def test_flexattr_field_query_item(self):
+        self.test_store_fetch_flexattrs_item()
+
+        q = beets.library.FlexibleAttributeMatchQuery(
+            'foo-bar', 'baz')
+        wrongq = beets.library.FlexibleAttributeMatchQuery(
+            'foo-bar', 'bazinga')        
+        assert(self.lib.items(query=q).next().id == 1)
+        assert(len(self.lib.items(query=q).rows) == 1)
+        assert(not self.lib.items(query=wrongq).rows)
+
+        q = beets.library.FlexibleAttributeSubstringQuery(
+            'foo-bar', 'a')
+        wrongq = beets.library.FlexibleAttributeSubstringQuery(
+            'foo-bar', 'bazinga')     
+        assert(self.lib.items(query=q).next().id == 1)
+        assert(len(self.lib.items(query=q).rows) == 1)
+        assert(not self.lib.items(query=wrongq).rows)
+
+    def test_flexattr_field_query_album(self):
+        self.test_store_fetch_flexattrs_album()
+
+        q = beets.library.FlexibleAttributeMatchQuery(
+            'foo-bar', 'baz', entity='album')
+        wrongq = beets.library.FlexibleAttributeMatchQuery(
+            'foo-bar', 'bazinga', entity='album')
+        assert(self.lib.albums(query=q)[0].id == 1)
+        assert(len(self.lib.albums(query=q)) == 1)
+        assert(not self.lib.albums(query=wrongq))
+
+        q = beets.library.FlexibleAttributeSubstringQuery(
+            'foo-bar', 'a', entity='album')
+        wrongq = beets.library.FlexibleAttributeSubstringQuery(
+            'foo-bar', 'bazinga', entity='album')     
+        assert(self.lib.albums(query=q)[0].id == 1)
+        assert(len(self.lib.albums(query=q)) == 1)
+        assert(not self.lib.albums(query=wrongq))
+
+    def test_flexattr_and_query_item(self):
+        """Search regular fields and flexattrs in the same query."""
+        self.test_store_fetch_flexattrs_item()
+        q1 = beets.library.FlexibleAttributeMatchQuery(
+            'foo-bar', 'baz')
+        q2 = beets.library.MatchQuery(
+            'artist', 'the artist')        
+        q = beets.library.AndQuery((q1,q2))
+        assert(self.lib.items(query=q).next().id == 1)
+        assert(len(self.lib.items(query=q).rows) == 1)
+
+    def test_flexattr_and_query_album(self):
+        """Search regular fields and flexattrs in the same query."""
+        self.test_store_fetch_flexattrs_album()
+        q1 = beets.library.FlexibleAttributeMatchQuery(
+            'foo-bar', 'baz', entity='album')
+        q2 = beets.library.MatchQuery(
+            'albumartist', 'the album artist')        
+        q = beets.library.AndQuery((q1,q2))
+        assert(self.lib.albums(query=q)[0].id == 1)
+        assert(len(self.lib.albums(query=q)) == 1)
+
+    def test_flexattr_anyfieldquery_item(self):
+        setattr(self.i, 'foo-bar', 'baz')
+        setattr(self.i2, 'foo-bar2', 'baz')
+        self.lib.store(self.i)
+        self.lib.store(self.i2)
+        q = beets.library.AnyFieldQuery(
+            'baz', ('foo-bar','foo-bar2'),#,'foo-bar2'), 
+            beets.library.FlexibleAttributeMatchQuery)
+        items = self.lib.items(q)
+        assert(len(items.rows) == 2)
+
+    def test_flexattr_anyfieldquery_album(self):
+        setattr(self.a, 'foo-bar', 'baz')
+        setattr(self.a2, 'foo-bar2', 'baz')
+        q = beets.library.AnyFieldQuery(
+            'baz', ('foo-bar','foo-bar2'),#,'foo-bar2'), 
+            beets.library.FlexibleAttributeMatchQuery, entity='album')
+        albums = self.lib.albums(query=q)
+        assert(len(albums) == 2)
+
 def suite():
     return unittest.TestLoader().loadTestsFromName(__name__)
 

@@ -254,6 +254,11 @@ class FlexattrDict(FixedDict):
             if d: return d
         return False
 
+    def add_namespace(self, namespace):
+        """Add given `namespace` to the dict if it doesn't already exist.
+        """
+        if not namespace in self:
+            self[namespace] = FixedDict(extendable=True)
 
 class Item(object):
     def __init__(self, values):
@@ -280,7 +285,10 @@ class Item(object):
                 setattr(self, key, values[key])
             except KeyError:
                 setattr(self, key, None)
-        f = values['flexattrs'] if 'flexattrs' in values else None
+        try:
+            f = values['flexattrs']
+        except (KeyError, IndexError):
+            f = None
         self.flexattrs = FlexattrDict(f)
 
     def _clear_dirty(self):
@@ -596,7 +604,7 @@ class RegexpQuery(RegisteredFieldQuery):
             return False
         return res is not None
 
-class FlexibleAttributeQuery(FieldQuery):
+class FlexibleAttributeQuery(Query):
     """An abstract class for a query that searches flexible attribute fields.    
     """
     stub = ''
@@ -607,35 +615,22 @@ class FlexibleAttributeQuery(FieldQuery):
         self.pattern = pattern
         self.entity = entity or 'item'
 
-    def clause(self, joiner=None):
-        subvals = (self.namespace, self.field, self.pattern)        
-        if not joiner:
-            #Return a full flexible attribute clause.
-            c = """id IN (SELECT entity_id FROM {0}_attributes WHERE {1})"""
-            return c.format(self.entity, self.stub), subvals
-        elif joiner == 'AND':
-            c = """EXISTS (SELECT 1 FROM {0}_attbitues AS ia 
-                WHERE {1} AND ia.entity_id = {0}s.id)"""
-            return c.format(self.entity, self.stub), subvals
-        else: #assume joiner == 'OR'
-            return self.stub, self.subvals
+    def clause(self):
+        subvals = (self.namespace, self.field, self.pattern)
+        c = """EXISTS (SELECT 1 FROM {0}_attributes AS ia 
+                WHERE {1} AND ia.entity_id = entity.id)"""
+        return c.format(self.entity, self.stub), subvals
 
 class FlexibleAttributeMatchQuery(FlexibleAttributeQuery):
     stub = 'namespace = ? AND key = ? AND value = ?'
 
-class FlexibleAttributeSubstringQuery(FlexibleAttributeQuery):
-    
+class FlexibleAttributeSubstringQuery(FlexibleAttributeQuery):    
     stub = "namespace = ? AND key = ? AND value LIKE ? escape '\\'"
 
-    def clause(self, joiner=None):
-        self.pattern = '%' + (self.pattern.replace('\\','\\\\').replace('%','\\%')
-                        .replace('_','\\_')) + '%'
-        return super(FlexibleAttributeSubstringQuery, self).clause(
-            joiner=joiner)
-
-class FlexibleAttributeRegexpQuery(FlexibleAttributeQuery):
-    stub = 'namespace = ? AND key = ? AND value REGEXP ?'
-            
+    def __init__(self, *args, **kwargs):
+        super(FlexibleAttributeSubstringQuery, self).__init__(*args, **kwargs)
+        self.pattern = '%' + (self.pattern.replace('\\','\\\\').replace(
+                '%','\\%').replace('_','\\_')) + '%'
 
 class BooleanQuery(MatchQuery):
     """Matches a boolean field. Pattern should either be a boolean or a
@@ -680,11 +675,9 @@ class CollectionQuery(Query):
         """
         clause_parts = []
         subvals = []
+
         for subq in self.subqueries:
-            if isinstance(subq, FlexibleAttributeQuery):
-                subq_clause, subq_subvals = subq.clause(joiner=joiner)
-            else:
-                subq_clause, subq_subvals = subq.clause()
+            subq_clause, subq_subvals = subq.clause()
             clause_parts.append('(' + subq_clause + ')')
             subvals += subq_subvals
         clause = (' ' + joiner + ' ').join(clause_parts)
@@ -1036,9 +1029,13 @@ class BaseAlbum(object):
     album-level metadata or use distinct backing stores.
     """
     def __init__(self, library, record):
+
         super(BaseAlbum, self).__setattr__('_library', library)
         super(BaseAlbum, self).__setattr__('_record', record)
-        f = record['flexattrs'] if 'flexattrs' in record else None
+        try:
+            f = record['flexattrs']
+        except (KeyError, IndexError):
+            f = None
         super(BaseAlbum, self).__setattr__('flexattrs', FlexattrDict(f))
 
     def __getattr__(self, key):
@@ -1047,7 +1044,7 @@ class BaseAlbum(object):
             return self._record[key]
         elif '-' in key:
             ns,key = key.split('-',1)
-            return self.flexattrs[ns].get(key)            
+            return self.flexattrs[ns].get(key)
         else:
             raise AttributeError('no such field %s' % key)
 
@@ -1499,7 +1496,7 @@ class Library(BaseLibrary):
     # Querying.
 
     def albums(self, query=None, artist=None):
-        query = get_query(query, True)
+        query = get_query(query, album=True)
         if artist is not None:
             # "Add" the artist to the query.
             query = AndQuery((query, MatchQuery('albumartist', artist)))
@@ -1513,7 +1510,7 @@ class Library(BaseLibrary):
         AS flexattrs
         FROM albums LEFT JOIN album_attributes
         ON albums.id = album_attributes.entity_id
-        GROUP BY albums.id )
+        GROUP BY albums.id ) AS entity 
         WHERE {} ORDER BY {}, album;'''.format(
             where, _orelse("albumartist_sort", "albumartist"))
 
@@ -1541,7 +1538,7 @@ class Library(BaseLibrary):
         FROM items LEFT JOIN item_attributes
         ON items.id = item_attributes.entity_id
         GROUP BY items.id 
-        ) 
+        ) AS entity 
         WHERE {} ORDER BY {}, album, disc, track;'''.format(
             where, _orelse("artist_sort", "artist"))
 
@@ -1580,13 +1577,9 @@ class Library(BaseLibrary):
         if album_id is None:
             return None
 
-        with self.transaction() as tx:
-            rows = tx.query(
-                'SELECT * FROM albums WHERE id=?',
-                (album_id,)
-            )
-        if rows:
-            return Album(self, dict(rows[0]))
+        albums = self.albums(MatchQuery('id', album_id))
+        if albums:
+            return albums[0]
 
     def add_album(self, items):
         """Create a new album in the database with metadata derived
@@ -1666,7 +1659,6 @@ class Album(BaseAlbum):
         elif '-' in key: #flexattr key
             namespace, key = key.split('-', 1)
             self.flexattrs[namespace][key] = value
-            
             # Save this flexible attribute to the database.
             sql = 'INSERT INTO album_attributes ' \
                       ' (entity_id, namespace, key, value)' \
