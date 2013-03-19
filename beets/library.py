@@ -160,6 +160,9 @@ ITEM_DEFAULT_FIELDS = ARTIST_DEFAULT_FIELDS + ALBUM_DEFAULT_FIELDS + \
 # Special path format key.
 PF_KEY_DEFAULT = 'default'
 
+FLEXATTR_FIELD_DELIMITER = '-||-'
+FLEXATTR_ROW_DELIMITER = '-;;-'
+
 
 
 
@@ -229,11 +232,14 @@ class FlexattrDict(FixedDict):
     """    
     def __init__(self, flexattrstring=''):
         super(FlexattrDict, self).__init__(extendable=True)
-        fstring = flexattrstring or ''
 
-        rows = flexattrstring.split('-;;-') if flexattrstring else ()
+        if flexattrstring:
+            rows = flexattrstring.split(FLEXATTR_ROW_DELIMITER)
+        else:
+            rows = ()
+        
         for row in rows:
-            namespace, key, value = row.split('-||-')
+            namespace, key, value = row.split(FLEXATTR_FIELD_DELIMITER)
             if not namespace in self:
                 self[namespace] = FixedDict(extendable=True)
             self[namespace][key] = value
@@ -1504,14 +1510,15 @@ class Library(BaseLibrary):
         sql = '''
         SELECT * FROM (
         SELECT albums.*,
-        GROUP_CONCAT(album_attributes.namespace || "-||-" ||
-                     album_attributes.key || "-||-" ||
-                     album_attributes.value, "-;;-")
+        GROUP_CONCAT(album_attributes.namespace || "{0}" ||
+                     album_attributes.key || "{0}" ||
+                     album_attributes.value, "{1}")
         AS flexattrs
         FROM albums LEFT JOIN album_attributes
         ON albums.id = album_attributes.entity_id
         GROUP BY albums.id ) AS entity 
-        WHERE {} ORDER BY {}, album;'''.format(
+        WHERE {2} ORDER BY {3}, album;'''.format(
+            FLEXATTR_FIELD_DELIMITER, FLEXATTR_ROW_DELIMITER,
             where, _orelse("albumartist_sort", "albumartist"))
 
         with self.transaction() as tx:
@@ -1531,15 +1538,16 @@ class Library(BaseLibrary):
         sql = '''
         SELECT * FROM (
         SELECT items.*,
-        GROUP_CONCAT(item_attributes.namespace || "-||-" ||
-                     item_attributes.key || "-||-" ||
-                     item_attributes.value, "-;;-")
+        GROUP_CONCAT(item_attributes.namespace || "{0}" ||
+                     item_attributes.key || "{0}" ||
+                     item_attributes.value, "{1}")
         AS flexattrs
         FROM items LEFT JOIN item_attributes
         ON items.id = item_attributes.entity_id
         GROUP BY items.id 
         ) AS entity 
-        WHERE {} ORDER BY {}, album, disc, track;'''.format(
+        WHERE {2} ORDER BY {3}, album, disc, track;'''.format(
+            FLEXATTR_FIELD_DELIMITER, FLEXATTR_ROW_DELIMITER,
             where, _orelse("artist_sort", "artist"))
 
         log.debug('Getting items with SQL: %s' % sql)
