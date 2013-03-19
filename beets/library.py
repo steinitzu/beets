@@ -638,7 +638,7 @@ class FlexibleAttributeSubstringQuery(FlexibleAttributeQuery):
         self.pattern = '%' + (self.pattern.replace('\\','\\\\').replace(
                 '%','\\%').replace('_','\\_')) + '%'
 
-class FlexibleAttributeRegexpQuery(FlexibleAttributeQuery, RegexpQuery):
+class FlexibleAttributeRegexpQuery(FlexibleAttributeQuery):
     stub = 'namespace = ? AND key = ? AND value REGEXP ?'
 
 class BooleanQuery(MatchQuery):
@@ -855,9 +855,11 @@ def parse_query_part(part):
     if match:
         key = match.group(1)
         term = match.group(2).replace('\:', ':')
-        if '-' in key:
+        if  key and '-' in key:
             defcls = FlexibleAttributeSubstringQuery
             prefindex = 1
+        else:
+            prefindex = 0
         # Match the search term against the list of prefixes.
         for pre, query_class in prefixes.items():
             if term.startswith(pre):
