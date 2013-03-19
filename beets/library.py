@@ -638,6 +638,9 @@ class FlexibleAttributeSubstringQuery(FlexibleAttributeQuery):
         self.pattern = '%' + (self.pattern.replace('\\','\\\\').replace(
                 '%','\\%').replace('_','\\_')) + '%'
 
+class FlexibleAttributeRegexpQuery(FlexibleAttributeQuery, RegexpQuery):
+    stub = 'namespace = ? AND key = ? AND value REGEXP ?'
+
 class BooleanQuery(MatchQuery):
     """Matches a boolean field. Pattern should either be a boolean or a
     string reflecting a boolean.
@@ -844,19 +847,24 @@ def parse_query_part(part):
     part = part.strip()
     match = PARSE_QUERY_PART_REGEX.match(part)
 
-    prefixes = {':': RegexpQuery}
+    prefixes = {':': (RegexpQuery, FlexibleAttributeRegexpQuery)}
     prefixes.update(plugins.queries())
+
+    defcls = SubstringQuery
 
     if match:
         key = match.group(1)
         term = match.group(2).replace('\:', ':')
+        if '-' in key:
+            defcls = FlexibleAttributeSubstringQuery
+            prefindex = 1
         # Match the search term against the list of prefixes.
         for pre, query_class in prefixes.items():
             if term.startswith(pre):
-                return key, term[len(pre):], query_class
-        return key, term, SubstringQuery  # The default query type.
+                return key, term[len(pre):], query_class[prefindex]
+        return key, term, defcls  # The default query type.
 
-def construct_query_part(query_part, default_fields, all_keys):
+def construct_query_part(query_part, default_fields, all_keys, entity='item'):
     """Create a query from a single query component. Return a Query
     instance or None if the value cannot be parsed.
     """
@@ -879,6 +887,10 @@ def construct_query_part(query_part, default_fields, all_keys):
         else:
             # Other query type.
             return query_class(pattern)
+
+    # Flexible attribute field
+    elif '-' in key:
+        return query_class(key, pattern, entity=entity)
 
     # A boolean field.
     elif key.lower() == 'comp':
@@ -1252,6 +1264,12 @@ class Library(BaseLibrary):
 
                 # Access SELECT results like dictionaries.
                 conn.row_factory = sqlite3.Row
+
+                # Add a REGEXP function
+                def regexp(expr, item):
+                    reg = re.compile(expr)
+                    return reg.search(item) is not None
+                conn.create_function('REGEXP', 2, regexp)
 
                 # Register plugin queries.
                 RegexpQuery.register(conn)
